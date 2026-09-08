@@ -46,6 +46,7 @@ cms/build/
 
 # Storage / DB
 storage/
+!api/app/storage/
 *.sqlite
 *.sqlite3
 *.db
