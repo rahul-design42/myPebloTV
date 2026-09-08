@@ -1,0 +1,113 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Lint + test the API
+  # -------------------------------------------------------------------------
+  api-test:
+    name: API — lint & test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: peblo
+          POSTGRES_PASSWORD: peblo
+          POSTGRES_DB: peblodb_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U peblo"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    defaults:
+      run:
+        working-directory: api
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: api/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run migrations (on test DB)
+        env:
+          DATABASE_URL: postgresql://peblo:peblo@localhost:5432/peblodb_test
+        run: alembic upgrade head
+
+      - name: Run tests
+        env:
+          DATABASE_URL: postgresql://peblo:peblo@localhost:5432/peblodb_test
+          TEST_DATABASE_URL: postgresql://peblo:peblo@localhost:5432/peblodb_test
+          SECRET_KEY: ci-test-secret-key-32-chars-long-xx
+          REFERENCE_JSON_PATH: ../seed/reference.json
+          SEED_DATA_PATH: ../seed/seed_shows.json
+          SEED_ASSETS_DIR: ../seed/assets
+        run: pytest tests/ -v --tb=short
+
+  # -------------------------------------------------------------------------
+  # Build Docker images (validates Dockerfiles are valid)
+  # -------------------------------------------------------------------------
+  docker-build:
+    name: Docker — build images
+    runs-on: ubuntu-latest
+    needs: api-test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build API image
+        run: docker build -f api/Dockerfile -t peblo-api:ci .
+
+      - name: Build CMS image
+        run: docker build -f cms/Dockerfile -t peblo-cms:ci ./cms
+
+      - name: Build Viewer image
+        run: docker build -f viewer/Dockerfile -t peblo-viewer:ci ./viewer
+
+  # -------------------------------------------------------------------------
+  # Deploy (written and explained — no real cloud target needed)
+  # -------------------------------------------------------------------------
+  deploy:
+    name: Deploy (explained)
+    runs-on: ubuntu-latest
+    needs: docker-build
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Explain deploy step
+        run: |
+          echo "=== Deployment strategy ==="
+          echo ""
+          echo "In production this step would:"
+          echo "  1. Push tagged Docker images to a container registry"
+          echo "     (e.g. Google Artifact Registry, AWS ECR, Docker Hub)"
+          echo "     using: docker push <registry>/<image>:<sha>"
+          echo ""
+          echo "  2. Roll out to the hosting platform (e.g. Cloud Run, ECS, k8s):"
+          echo "     - Cloud Run: gcloud run deploy peblo-api --image <image> --region <region>"
+          echo "     - ECS:       aws ecs update-service --cluster peblo --service api --force-new-deployment"
+          echo ""
+          echo "  3. Run alembic upgrade head against the production DB"
+          echo "     via a one-off container / migration job before traffic switches."
+          echo ""
+          echo "  Secrets (DATABASE_URL, SECRET_KEY, etc.) are injected at deploy time"
+          echo "  from the platform's secret manager — never stored in this repo."

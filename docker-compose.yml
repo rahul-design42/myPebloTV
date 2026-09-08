@@ -1,0 +1,84 @@
+services:
+  # -------------------------------------------------------------------------
+  # PostgreSQL 16
+  # -------------------------------------------------------------------------
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: peblo
+      POSTGRES_PASSWORD: peblo
+      POSTGRES_DB: peblodb
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U peblo -d peblodb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # -------------------------------------------------------------------------
+  # FastAPI backend
+  # Build context is the repo root so the Dockerfile can COPY both api/ and seed/
+  # -------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://peblo:peblo@db:5432/peblodb
+      SECRET_KEY: ${SECRET_KEY:-dev-secret-key-change-in-production-use-a-long-random-string}
+      ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: "1440"
+      STORAGE_ROOT: /app/storage
+      STORAGE_BASE_URL: http://localhost:8000/media
+      REFERENCE_JSON_PATH: /seed/reference.json
+      SEED_DATA_PATH: /seed/seed_shows.json
+      SEED_ASSETS_DIR: /seed/assets
+    volumes:
+      - api_storage:/app/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # -------------------------------------------------------------------------
+  # CMS (React Vite App)
+  # -------------------------------------------------------------------------
+  cms:
+    build:
+      context: ./cms
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+
+  # -------------------------------------------------------------------------
+  # Viewer (React Vite App)
+  # -------------------------------------------------------------------------
+  viewer:
+    build:
+      context: ./viewer
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3001:80"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  api_storage:
